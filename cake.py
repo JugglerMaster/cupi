@@ -74,7 +74,17 @@ class CUPI(object):
                     for i in resp.json()['LicenseStatusCount']]
         else:
             return resp.json()
-
+        
+    def user_query(self, username):
+        """
+        Get the user based on just the alias
+        :return: An xml list of data for the user e.g. DtmfAccessId, Alias, FirstName, LastName, DisplayName
+        """
+        #vmrest/users?query=(alias%20is%20username)
+        url = '{0}/users?query=(alias is {1})'.format(self.url_base, username)
+        resp = self.cuc.get(url, timeout=self.timeout)
+        return resp.json()
+    
     def get_languages(self):
         """
         Get a dictionary of languages
