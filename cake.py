@@ -4,12 +4,15 @@ Author: Brad Searle
 Version: 0.4.4
 Dependencies:
 - requests: http://docs.python-requests.org/en/latest/
+CUPI api reference on password resets https://www.cisco.com/c/en/us/td/docs/voice_ip_comm/connection/REST-API/CUPI_API/b_CUPI-API/b_CUPI-API_chapter_011110.pdf
+CUPI current docs https://www.cisco.com/c/en/us/td/docs/voice_ip_comm/connection/REST-API/CUPI_API/b_CUPI-API/b_CUPI-API_chapter_011110.html#reference_38E38BB12CB64112AD637A337837CF55
 """
 
 import requests
 
 
 class CUPI(object):
+    status = ""
     """
     Class for configuring Cisco Unity
 
@@ -20,7 +23,7 @@ class CUPI(object):
     >>> '89443b75-0547-4008-8245-39c3abeaed31'
     """
 
-    def __init__(self, cuc, username, password, verify=False, disable_warnings=False, timeout=2):
+    def __init__(self, cuc, username, password, verify=False, disable_warnings=False, timeout=20):
         """
         Sets up the connection to Cisco Unity Connection
 
@@ -41,12 +44,12 @@ class CUPI(object):
         self.cuc.headers.update({
             'Accept': 'application/json',
             'Connection': 'keep_alive',
-            'Content_type': 'application/json',
+            'Content-type': 'application/json',
         })
-
+        self.keep_alive = False
         if self.disable_warnings:
             requests.packages.urllib3.disable_warnings()
-
+        
     def get_server_info(self, online_test=False):
         """
         Get information relating to the server configuration
@@ -56,10 +59,79 @@ class CUPI(object):
         url = '{0}/cluster'.format(self.url_base)
         resp = self.cuc.get(url, timeout=self.timeout)
         if online_test:
-            return resp.status_code
+            return True
         else:
-            return resp.json()['Server']
+            CUPI.status = resp.json()['Server']
+            print(CUPI.status)
+            return False
 
+    def user_query(self, username):
+        """
+        Get the user based on just the alias
+        :return: An xml list of data for the user e.g. DtmfAccessId, Alias, FirstName, LastName, DisplayName
+        """
+        #vmrest/users?query=(alias%20is%20username)
+        url = '{0}/users?query=(alias is {1})'.format(self.url_base, username)
+        resp = self.cuc.get(url, timeout=self.timeout)
+        return resp.json()
+
+    def get_oid(self, username):
+        url = '{0}/users?query=(alias is {1})'.format(self.url_base, username)
+        resp = self.cuc.get(url, timeout=self.timeout)
+        return resp.json()["User"]['ObjectId']
+    def ext_query(self, DtmfAccessId):
+        """
+        Check if extension exists
+        :return: An xml list of data for the user e.g. DtmfAccessId, Alias, FirstName, LastName, DisplayName
+        """
+        #vmrest/users?query=(alias%20is%20username)
+        url = '{0}/users?query=(DtmfAccessId is {1})'.format(self.url_base, DtmfAccessId)
+        resp = self.cuc.get(url, timeout=self.timeout)
+        return resp.json()
+    #def delete_ext(self, ext):
+
+    def unlock_pin_username(self, username):
+        results = CUPI.user_query(self, username)
+        user_oid = results["User"]['ObjectId']
+        url = '{0}/users/{1}/credential/pin'.format(self.url_base, user_oid)
+        body = {"HackCount":"0", "TimeHacked":""}
+
+        resp = self.cuc.put(url, json=body, timeout=self.timeout)
+        if resp.status_code != 204:
+            CUPI.status = 'Could not unlock VM PIN: {0} {1} {2}'.format(resp.status_code, resp.reason, resp.text)
+            print(CUPI.status)
+            return False
+        else:
+            CUPI.status = 'User VM successfully unlocked', username
+            print(CUPI.status)
+            return True
+    def set_pin_username(self, pin, username):
+        self.cuc.headers.update({
+            'Accept': 'application/json',
+            'Content-type': 'application/json',
+            'Connection': 'keep-alive',
+        })
+        results = CUPI.user_query(self, username)
+        user_oid = results["User"]['ObjectId']
+        #print(results)
+        #print("ObjectID:")
+        #print(user_oid) 
+        url = '{0}/users/{1}/credential/pin'.format(self.url_base, user_oid)
+        body = {'CredMustChange':'true', "Credentials": pin}
+        #print(url)
+        print(body)
+
+        resp = self.cuc.put(url, json=body, timeout=self.timeout)
+        print(resp)
+        if resp.status_code != 204:
+            CUPI.status = 'Could not update VM PIN: {0} {1} {2}'.format(resp.status_code, resp.reason, resp.text)
+            print(CUPI.status)
+            return False
+        else:
+            CUPI.status = 'Successfully set password and set to must change', username
+            print(CUPI.status)
+            return True
+            
     def get_license_info(self, mini=True):
         """
         Get the CUC server licensing information
@@ -74,17 +146,7 @@ class CUPI(object):
                     for i in resp.json()['LicenseStatusCount']]
         else:
             return resp.json()
-        
-    def user_query(self, username):
-        """
-        Get the user based on just the alias
-        :return: An xml list of data for the user e.g. DtmfAccessId, Alias, FirstName, LastName, DisplayName
-        """
-        #vmrest/users?query=(alias%20is%20username)
-        url = '{0}/users?query=(alias is {1})'.format(self.url_base, username)
-        resp = self.cuc.get(url, timeout=self.timeout)
-        return resp.json()
-    
+
     def get_languages(self):
         """
         Get a dictionary of languages
@@ -357,6 +419,7 @@ class CUPI(object):
         if resp.status_code == 200:
             return resp.json()
         elif resp.status_code == 404:
+            
             return 'User not found'
         else:
             return 'Unknown result: {0} {1} {2}'.format(resp.status_code, resp.reason, resp.text)
@@ -409,30 +472,44 @@ class CUPI(object):
             return [(resp['UserTemplate']['Alias'], resp['UserTemplate']['ObjectId'])]
         else:
             return [(i['Alias'], i['ObjectId']) for i in resp['UserTemplate']]
-
+    def update_email(self, username, email):
+        """
+        update user's email
+        """
+        results = CUPI.user_query(self, username)
+        user_oid = results["User"]['ObjectId']
+        #/vmrest/users/{objectid}
+        #<DisplayName>johnd</DisplayName>
+        url = '{0}/users/{1}'.format(self.url_base, user_oid)
+        body = {
+           
+            'EmailAddress': email,
+        }
+        resp = self.cuc.post(url, json=body, timeout=self.timeout)
     def add_user(self,
                  display_name,
                  dtmf_access_id,
                  first_name,
                  last_name,
                  user_template,
-                 timezone,
+                 #timezone,
+                 emailAddress,
                  is_vm_enrolled='false',
-                 country='AU',
-                 use_default_timezone='false',
-                 cred_must_change='false'):
+                 #country='US',
+                # use_default_timezone='false',
+                 cred_must_change='true',
+                 IsVmEnrolled='true'):
         """
         Add a user
         :param display_name:
-        :param dtmf_access_id:
+        :param dtmf_access_id: (extension)
         :param first_name:
         :param last_name:
         :param user_template:
-        :param timezone:
-        :param is_vm_enrolled:
-        :param country:
-        :param use_default_timezone:
+        :param emailAddress:
+        :param is_vm_enrolled: (default=false)
         :param cred_must_change:
+        :param IsVmEnrolled: (default=true)
         :return: Result & user_oid if successful
 
         example usage:
@@ -442,6 +519,8 @@ class CUPI(object):
         >>> 'e16922d4-aabf-4dec-9e83-9abaa64dfa02'
         """
         url = '{0}/users?templateAlias={1}'.format(self.url_base, user_template)
+        coses = self.query_class_of_service()['Cos'][3]['ObjectId']
+        print("Email: " + emailAddress)
         body = {
             'Alias': display_name,
             'DisplayName': display_name,
@@ -449,9 +528,12 @@ class CUPI(object):
             'FirstName': first_name,
             'LastName': last_name,
             'IsVmEnrolled': is_vm_enrolled,
-            'Country': country,
-            'UseDefaultTimeZone': use_default_timezone,
-            'TimeZone': timezone,
+            #'Country': country,
+            #'UseDefaultTimeZone': use_default_timezone,
+            #'TimeZone': timezone,
+            'EmailAddress': emailAddress,
+            'IsVmEnrolled': IsVmEnrolled,
+            'CosObjectId': coses
         }
 
         resp = self.cuc.post(url, json=body, timeout=self.timeout)
@@ -471,6 +553,65 @@ class CUPI(object):
                 return 'User successfully added', user_oid
         else:
             return 'User successfully added', user_oid
+    def query_um_template(self):
+        #https://usiptpuc01.hbfuller.com/vmrest/externalservices
+        url = '{0}/externalservices'.format(self.url_base)
+        resp = self.cuc.get(url, timeout=self.timeout)
+        print(resp.json())
+        return resp.json()
+    def query_class_of_service(self):
+        url = '{0}/coses'.format(self.url_base)
+        resp = self.cuc.get(url, timeout=self.timeout)
+        return resp.json()
+    def set_class_of_service(self, username):
+        coses = self.query_class_of_service()['Cos'][3]
+        results = CUPI.user_query(self, username)
+        user_oid = results["User"]['ObjectId']
+        print(coses)
+        url = '{0}/users/{1}'.format(self.url_base, user_oid)
+        body = {"CosObjectId":coses['ObjectId']}
+        #'Post url https://<connection-server>/vmrest/users/<user-objectid>'
+        print(url)
+        print(body)
+        resp = self.cuc.put(url, json=body, timeout=self.timeout)
+        if resp.status_code == 204:
+            CUPI.status = 'Changed Class of Service to Single in box: ' + username
+            print(CUPI.status)
+            return True
+        else:
+            CUPI.status = 'Unknown result: {0} {1} {2}'.format(resp.status_code, resp.reason, resp.text)
+            print(CUPI.status)
+            return False
+    def get_user_templates(self):
+        #https://<connection-server>/vmrest/usertemplates
+        #look for <Alias>
+        url = '{0}/usertemplates'.format(self.url_base)
+        resp = self.cuc.get(url, timeout=self.timeout)
+        return resp.json()
+    def add_unified_messaging(self, username):
+        """ test"""
+        results = CUPI.user_query(self, username)
+        user_oid = results["User"]['ObjectId']
+        
+        results = CUPI.query_um_template(self)
+        #print(results)
+        um_account = results['ExternalService']['ObjectId']
+        #user_oid = results["User"]['ObjectId']
+        url = '{0}/users/{1}/externalserviceaccounts'.format(self.url_base, user_oid, um_account)
+        body = {"ExternalServiceObjectId": um_account, "SubscriberObjectId": user_oid, 'EnableMeetingCapability': 'false', 'IsPrimaryMeetingService': 'false', 'UserURI': "/vmrest/users/" + user_oid, "LoginType": "0", "UserPassword": "", "EmailAddressUseCorp": "true", "EnableCalendarCapability":"false", "EnableMailboxSynchCapability":"true", "EnablTtsOfEmailCapability":"false"}
+        #'Post url https://<connection-server>/vmrest/users/<user-objectid>/externalserviceaccounts'
+        print(url)
+        print(body)
+        resp = self.cuc.post(url, json=body, timeout=self.timeout)
+
+        if resp.status_code == 201:
+            CUPI.status = 'Unified Messaging Account Added to ' + username
+            print(CUPI.status)
+            return True
+        else:
+            CUPI.status = 'Unknown result: {0} {1} {2}'.format(resp.status_code, resp.reason, resp.text)
+            print(CUPI.status)
+            return False
 
     def update_user_schedule(self, user_call_handler_oid, schedule_set_oid):
         """
@@ -503,7 +644,9 @@ class CUPI(object):
         resp = self.cuc.get(url, timeout=self.timeout)
 
         if resp.status_code != 200:
-            return 'Something went wrong: {0} {1} {2}'.format(resp.status_code, resp.reason, resp.text)
+            CUPI.status = 'Something went wrong: {0} {1} {2}'.format(resp.status_code, resp.reason, resp.text)
+            print(CUPI.status)
+            return False
         elif resp.json()['@total'] == '1':
             user_oid = resp.json()['User']['ObjectId']
 
@@ -513,13 +656,21 @@ class CUPI(object):
             resp = self.cuc.put(url, json=body, timeout=self.timeout)
 
             if resp.status_code != 204:
-                return 'Something went wrong: {0} {1} {2}'.format(resp.status_code, resp.reason, resp.text)
+                CUPI.status = 'Something went wrong: {0} {1} {2}'.format(resp.status_code, resp.reason, resp.text)
+                print(CUPI.status)
+                return False
             else:
-                return 'Pin updated successfully'
+                CUPI.status = 'Pin updated successfully'
+                print(CUPI.status)
+                return True
         elif resp.json()['@total'] == '0':
-            return 'User directory number not found: {0}'.format(dtmf_access_id)
+            CUPI.status = 'User directory number not found: {0}'.format(dtmf_access_id)
+            print(CUPI.status)
+            return False
         else:
-            return 'Unknown result: {0} {1} {2}'.format(resp.status_code, resp.reason, resp.text)
+            CUPI.status = 'Unknown result: {0} {1} {2}'.format(resp.status_code, resp.reason, resp.text)
+            print(CUPI.status)
+            return False
 
     def delete_user(self, user_oid):
         """
@@ -532,11 +683,17 @@ class CUPI(object):
         resp = self.cuc.delete(url, timeout=self.timeout)
 
         if resp.status_code == 204:
-            return 'User deleted'
+            CUPI.status = 'User deleted'
+            print(CUPI.status)
+            return True
         elif resp.status_code == 404:
-            return 'User not found'
+            CUPI.status = 'User not found'
+            print(CUPI.status)
+            return False
         else:
-            return 'Unknown result: {0} {1} {2}'.format(resp.status_code, resp.reason, resp.text)
+            CUPI.status = 'Unknown result: {0} {1} {2}'.format(resp.status_code, resp.reason, resp.text)
+            print(CUPI.status)
+            return False
 
     def get_call_handler_template_oid(self):
         """
