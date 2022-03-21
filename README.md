@@ -1,5 +1,8 @@
 ### CUPI is a Python module to manage Cisco Unity Connection via the CUPI REST API
 
+I use this in conjuction with my WSLControl script for creating phones
+https://github.com/JugglerMaster/WSLControl
+
 ### Installation
 Clone repository
 ```bash
